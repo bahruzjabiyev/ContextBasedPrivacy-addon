@@ -1,133 +1,118 @@
 const assignManager = {
 
+	NEW_TAB_PAGES: new Set([
+	    "about:startpage",
+	    "about:newtab",
+	    "about:home",
+	    "about:blank"
+  	]),
 
-	storageArea: {
-    area: browser.storage.local,
-    exemptedTabs: {},
-
-    getSiteStoreKey(pageUrl) {
-      const url = new window.URL(pageUrl);
-      const storagePrefix = "siteContainerMap@@_";
-      return `${storagePrefix}${url.hostname}`;
-    },
-
-    set(pageUrl, data) {
-      const siteStoreKey = this.getSiteStoreKey(pageUrl);
-      return this.area.set({
-        [siteStoreKey]: data
-      });
-    },
-
-    get(pageUrl) {
-      const siteStoreKey = this.getSiteStoreKey(pageUrl);
-      return new Promise((resolve, reject) => {
-        this.area.get([siteStoreKey]).then((storageResponse) => {
-          if (storageResponse && siteStoreKey in storageResponse) {
-          	//return whatever was stored with the key
-          	//in our case storageResponse[siteStoryKey] == usercontextid
-            resolve(storageResponse[siteStoreKey]);
-          }
-          resolve(null);
-        }).catch((e) => {
-          reject(e);
-        });
-      });
-    },
-
-    getUserContextIdFromCookieStoreId(cookieStoreId) {
-    	if (!cookieStoreId) {
-      		return false;
-    	}
-    	const container = cookieStoreId.replace("firefox-container-", "");
-    	if (container !== cookieStoreId) {
-      		return container;
-    	}
-    	return false;
-  	},
-    
-  	reloadPageInContainer(options.url, cookieStoreId, index){
-
-  		try{
-
-  			await creating = browser.tabs.create({
-    		url:options.url,
-    		cookieStoreId: cookieStoreId,
-        	index
-
+  	ifResponseNotRedirection(pageurl){
+  		return new Promise((resolve, reject) => {
+  			let xhr = new XMLHttpRequest;
+  			try {
+  				xhr.open('GET', pageurl, true);
+  				xhr.send();
+  			} catch (e) {
+  				reject(e);
+  			}
+  			
+  			xhr.onerror = (evt) => {
+	        	reject(evt);
+	    	};
+	    
+  			xhr.onreadystatechange = function () {
+			  if(xhr.readyState === XMLHttpRequest.DONE && xhr.status === 200) {
+			  	if(pageurl == xhr.responseURL){
+			  		resolve(pageurl);
+			  	}
+			  }
+			};
   		});
-  		}
-
-  		catch(e) {
-
-  			console.log(e)
-
-
-  		}
-
   	},
+
+  	onError(e) {
+	  console.error(e);
+	},
+
 
 	async onBeforeRequest(options) {
 		if (options.frameId !== 0 || options.tabId === -1) {
       		return {};
     	}
 
-    	let topic = 'News'
-    	//access storage area
-    	const [tab, siteSettings] = await Promise.all([
-     	 	browser.tabs.get(options.tabId),
-      		this.storageArea.get(options.url)//returns sitesettings -> siteSettings is an object {userContextId:1}
-   		 ]);
+    	//console.error(options.url);
+    	let linkCategory, _name, _color, _icon, _csid; // csid is short of cookieStoreId 
+    	this.ifResponseNotRedirection(options.url).then((req_url) => {
+    		if (req_url.search("https") !== -1){
+    			linkCategory = "Secure";
+    		} else linkCategory = "Insecure";
+    		//console.error(`This link category is: ${linkCategory}`);
+    		browser.contextualIdentities.query({name: linkCategory}).then((cids) => { //cids is short for contextualIdentities
+    			if (cids.length === 0){
+    				console.error(`There is no such a container: ${linkCategory}`);
+    				
+    				if (linkCategory == "Secure"){
+    					_name = "Secure";
+    					_color = "blue";
+    					_icon = "fingerprint";
+    				} else {
+    					_name = "Insecure";
+    					_color = "red";
+    					_icon = "circle";
+    				}
 
-    	let container;
-  
+    				browser.contextualIdentities.create({
+					  name: _name,
+					  color: _color,
+					  icon: _icon
+					}).then((cid) => {
+						console.error(`Created the category with CID: ${cid.cookieStoreId}`);  //Secure => firefox-container-144
+					}, this.onError);
+    			} else {
+    				//console.error(`Site has the CID: ${cids[0].cookieStoreId}`);
+    				_csid = cids[0].cookieStoreId;
+    			}
+    		}, this.onError);
+    		
+    		browser.tabs.get(options.tabId).then((tab) => {
+    			if(tab.cookieStoreId !== _csid){
+	    			browser.tabs.create({
+	    				url: options.url,
+	    				cookieStoreId: _csid,
+	    				index: tab.index + 1
+	    			}).then((new_tab) => {
+			  			console.error(`A new tab of ${new_tab.url} created at tabindex ${new_tab.index}`);
+			  		}).catch((ex) => {
+			  			
+			  		});	
+		  		}
 
-    	try {
-      		container = await browser.contextualIdentities.get(tab.cookieStoreId);
-    	} catch (e) {
-    		//first time this will be set
-      	container = false;
-   		}
+		  		if (this.NEW_TAB_PAGES.has(tab.url) || tab.cookieStoreId !== _csid){
+		  			//console.error(tab.url);
+		  			browser.tabs.remove(tab.id);
+		  		}
+    		}, this.onError);
 
-    // The container we have in the assignment map isn't present any more so lets remove it
-    //   then continue the existing load
+    	}, this.onError);
 
-    	if (!container){
-		    try {
-		    	let createContext = await browser.contextualIdentities.create({name: topic, color: "purple", icon: "briefcase"});
-		    	this.storageArea.set(options.url, {userContextId: this.getUserContextIdFromCookieStore(tab.cookieStoreId)})
-		    	//store the siteSettings inside localstorage
-		    	//this.storageArea.set(options.url, {userContextualId: something })	
-		    } catch (e) {
-		    	console.log(e)
-		    }
-		}
-		    
 
-   		this.reloadPageInContainer(options.url, tab.cookieStoreId, tab.index + 1);
  
 	},
- 
 
 	init(){
 		browser.webRequest.onBeforeRequest.addListener((options) => {
       		return this.onBeforeRequest(options);
 		},{urls: ["<all_urls>"], types: ["main_frame"]}, ["blocking"]);
-
+		//this.createContainer();
 		
 	},
 
-	getTopicFromURL(url) {
+	identifyContext(url) {
 	    var xhr = new XMLHttpRequest();
 	    xhr.onreadystatechange = () => {
 	        if (xhr.readyState == 4 && xhr.status == 200) {
-	            //var response = document.querySelector('#response');
 	            var response = JSON.parse(xhr.response);
-	            //var resultToSpeak = `With a confidence of ${Math.round(reponse.description.captions[0].confidence * 100)}%, I think it's ${reponse.description.captions[0].text}`;
-	            /*#######
-				Do something with the response. Extract the topic
-
-	            */
-
 	            console.error(response);
 	        }
 	    };
@@ -139,7 +124,6 @@ const assignManager = {
 	        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
 	        xhr.setRequestHeader("X-AYLIEN-TextAPI-Application-Key", "98ee53012572f0d485dab2858158da44");
 	        xhr.setRequestHeader("X-AYLIEN-TextAPI-Application-ID", "021b6ba8");
-	        //var requestObject = { "url": url };
 	        xhr.send('url='+url);
 	    }
 	    catch (ex) {
@@ -147,17 +131,5 @@ const assignManager = {
 	    }
 	}
 
-
 }
-
 assignManager.init();
-//assign manager is a class
-//
-/*function logURL(requestDetails) {
-  console.log("HEHEHHEHEEHEHEHEHHEHEEH: " + requestDetails.url);
-}
-
-browser.webRequest.onBeforeRequest.addListener(
-  logURL,
-  {urls: ["<all_urls>"], types: ["main_frame"]}
-);*/
